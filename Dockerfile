@@ -1,34 +1,39 @@
+# installer stage with user setup
 FROM node:20-buster as installer
+#RUN useradd -m -s /bin/bash -u 65532 myuser \
+#    && mkdir -p /home/myuser/.npm-global \
+#    && chown -R myuser:myuser /home/myuser/.npm-global
+#ENV PATH=/home/myuser/.npm-global/bin:$PATH
+
+
 COPY . /juice-shop
+#RUN chown -R myuser:myuser /juice-shop
 WORKDIR /juice-shop
-RUN npm i -g typescript ts-node
-RUN npm install --omit=dev --unsafe-perm
-RUN npm dedupe
-RUN rm -rf frontend/node_modules
-RUN rm -rf frontend/.angular
-RUN rm -rf frontend/src/assets
-RUN mkdir logs
-RUN chown -R 65532 logs
-RUN chgrp -R 0 ftp/ frontend/dist/ logs/ data/ i18n/
-RUN chmod -R g=u ftp/ frontend/dist/ logs/ data/ i18n/
-RUN rm data/chatbot/botDefaultTrainingData.json || true
-RUN rm ftp/legal.md || true
-RUN rm i18n/*.json || true
 
-ARG CYCLONEDX_NPM_VERSION=latest
-RUN npm install -g @cyclonedx/cyclonedx-npm@$CYCLONEDX_NPM_VERSION
-RUN npm run sbom
+#USER myuser
 
-# workaround for libxmljs startup error
+#RUN npm config set prefix '/home/myuser/.npm-global' \
+RUN npm i -g typescript ts-node \
+    && npm install --omit=dev --unsafe-perm \
+    && npm dedupe
+
+# Permissions and cleaning up
+RUN mkdir logs \
+#    && chown -R myuser:myuser logs \
+#    && chgrp -R 0 ftp/ frontend/dist/ logs/ data/ i18n/ \
+#    && chmod -R g=u ftp/ frontend/dist/ logs/ data/ i18n/ \
+    && rm data/chatbot/botDefaultTrainingData.json || true \
+    && rm ftp/legal.md || true \
+    && rm i18n/*.json || true
+
+# libxmljs-builder stage doesn't need npm global installs
 FROM node:20-buster as libxmljs-builder
 WORKDIR /juice-shop
 RUN apt-get update && apt-get install -y build-essential python3
-COPY --from=installer /juice-shop/node_modules ./node_modules
-RUN rm -rf node_modules/libxmljs2/build && \
-  cd node_modules/libxmljs2 && \
-  npm run build
+COPY --from=installer /juice-shop .
 
-FROM gcr.io/distroless/nodejs20-debian11
+# Final stage
+FROM node:20-buster
 ARG BUILD_DATE
 ARG VCS_REF
 LABEL maintainer="Bjoern Kimminich <bjoern.kimminich@owasp.org>" \
@@ -43,9 +48,13 @@ LABEL maintainer="Bjoern Kimminich <bjoern.kimminich@owasp.org>" \
     org.opencontainers.image.source="https://github.com/juice-shop/juice-shop" \
     org.opencontainers.image.revision=$VCS_REF \
     org.opencontainers.image.created=$BUILD_DATE
+COPY --from=installer  /juice-shop /juice-shop
+COPY --from=libxmljs-builder /juice-shop/node_modules/libxmljs2 /juice-shop/node_modules/libxmljs2
+#COPY --from=installer --chown=65532:0 /juice-shop /juice-shop
+#COPY --from=libxmljs-builder --chown=65532:0 /juice-shop/node_modules/libxmljs2 /juice-shop/node_modules/libxmljs2
+#USER 65532
 WORKDIR /juice-shop
-COPY --from=installer --chown=65532:0 /juice-shop .
-COPY --chown=65532:0 --from=libxmljs-builder /juice-shop/node_modules/libxmljs2 ./node_modules/libxmljs2
-USER 65532
 EXPOSE 3000
-CMD ["/juice-shop/build/app.js"]
+#CMD ["node", "/juice-shop/build/app.js"]
+CMD ["npm", "start"]
+
